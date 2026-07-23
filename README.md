@@ -175,7 +175,7 @@ If the URL ever leaks: in Outlook Web, unpublish the calendar, then publish it a
 
 - Microsoft's published-calendar feed refreshes server-side roughly every hour. Meetings added within the last hour may not appear in the feed yet, so last-minute additions can be missed. Other providers vary (Google is a few minutes, Fastmail is near-realtime), so your mileage depends on where your calendar lives.
 - Python's `urllib.request` gets HTTP 400 from the Microsoft endpoint even with a curl-ish User-Agent, for reasons I did not care enough to reverse-engineer. The script shells out to `curl` instead. That workaround is content-blind so it works fine against any provider, but if you're not on Outlook you'll probably never notice the fallback exists.
-- WLED effect numbers vary slightly between firmware versions. If your amber "pulse" looks wrong, try other values in the `EFFECT_BREATHE` constant. WLED docs list them all.
+- WLED effect numbers vary slightly between firmware versions. If your amber "pulse" looks wrong, try other values in the `EFFECT_ALERT` constant. WLED docs list them all.
 
 ## Licence
 

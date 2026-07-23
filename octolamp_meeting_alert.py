@@ -44,7 +44,7 @@ ICS_LOOKAHEAD_MINUTES = 60
 AMBER = [255, 140, 0]
 RED = [255, 0, 0]
 EFFECT_SOLID = 0
-EFFECT_BREATHE = 12  # WLED "Fade" — cycles between col1 and col2 without dropping brightness
+EFFECT_ALERT = 12  # WLED "Fade" effect: cycles between col1 and col2 without dropping brightness
 
 STATE_IDLE = "idle"
 STATE_WARN = "warn"
@@ -222,7 +222,7 @@ def main() -> None:
                 if current_state == STATE_IDLE and new_state != STATE_IDLE:
                     saved_lamp_state = wled_get_state()
                 if new_state == STATE_WARN:
-                    apply_alert(AMBER, EFFECT_BREATHE)
+                    apply_alert(AMBER, EFFECT_ALERT)
                 elif new_state == STATE_IMMINENT:
                     apply_alert(RED, EFFECT_SOLID)
                 elif new_state == STATE_IDLE:
