@@ -1,6 +1,9 @@
 # octolamp-meeting-alert
 
-A tiny Python script that watches your Outlook calendar and flashes your [Octolamp](https://github.com/martinwoodward/octolamp) (or any other [WLED](https://kno.wled.ge/) device) before a meeting starts.
+A tiny Python script that watches your calendar and flashes your [Octolamp](https://github.com/martinwoodward/octolamp) (or any other [WLED](https://kno.wled.ge/) device) before a meeting starts.
+
+> [!NOTE]
+> Works with any iCalendar (`.ics`) subscription URL. I've only tested it against Outlook on the web, but the parser is RFC 5545 standard so Google Calendar, iCloud/Apple Calendar, Fastmail, Proton, Nextcloud etc. should all work. If your provider doesn't, [open an issue](https://github.com/billythekid/octolamp-meeting-alert/issues) or send a PR.
 
 - Amber pulse at T-5 minutes.
 - Red solid at T-1 minute.
@@ -13,7 +16,7 @@ Runs on your Mac in a terminal window (or as a background LaunchAgent if you wan
 - macOS. Uses `security` for the Keychain, `pbpaste` for pasting, and `launchctl` for the optional auto-start. Nothing else is Mac-specific in the script itself, but the setup steps assume macOS.
 - Python 3.9 or later.
 - A WLED device on the same LAN as your Mac. The [Octolamp](https://github.com/martinwoodward/octolamp) is the obvious choice, but any WLED build works.
-- An Outlook mailbox that lets you publish your calendar as an `.ics` URL.
+- An Outlook mailbox that lets you publish your calendar as an `.ics` URL (or any other provider that gives you a subscribable iCal URL).
 
 ## What it does not need
 
@@ -23,11 +26,18 @@ Runs on your Mac in a terminal window (or as a background LaunchAgent if you wan
 
 ## Setup
 
-### 1. Publish your Outlook calendar
+### 1. Publish your calendar as an iCal URL
 
-In Outlook on the web: Settings → Calendar → Shared calendars → Publish a calendar. Pick your main calendar, set permissions to "Can view all details", and publish. You get an `.ics` URL. Copy it.
+**Outlook on the web** (what I use): Settings → Calendar → Shared calendars → Publish a calendar. Pick your main calendar, set permissions to "Can view all details", and publish. You get an `.ics` URL. Copy it.
 
-The URL contains a token in the path. Anyone with the URL can read your full calendar. Treat it like a password: do not paste it into chats, screenshots, or anywhere it might be logged. If it leaks, unpublish and republish to rotate the token.
+**Google Calendar**: Settings → your calendar → Integrate calendar → "Secret address in iCal format". Copy that. (The "Public URL" also works if your calendar is public.)
+
+**iCloud / Apple Calendar**: right-click the calendar in Calendar.app → Share Calendar → tick Public Calendar → copy the `webcal://` URL and change the scheme to `https://`.
+
+**Anything else**: whatever your provider calls "subscribe" or "iCal URL" or "webcal link". If it ends in `.ics` and returns iCalendar text when you `curl` it, it works here.
+
+> [!WARNING]
+> The URL contains a token in the path. Anyone with the URL can read your full calendar. Treat it like a password: do not paste it into chats, screenshots, or anywhere it might be logged. If it leaks, unpublish and republish to rotate the token.
 
 ### 2. Store the URL in Keychain
 
@@ -38,7 +48,10 @@ security delete-generic-password -a "$USER" -s "octolamp-ics-url" 2>/dev/null
 security add-generic-password -a "$USER" -s "octolamp-ics-url" -w "$(pbpaste | tr -d '\n\r\t ')"
 ```
 
-The `pbpaste | tr` bit strips any whitespace or newlines that sometimes tag along with a copy. This matters. If you use the interactive form (`security add-generic-password ... -w` with no value), the terminal prompt can silently truncate long URLs on paste, and you will get 400s from Microsoft with no obvious cause.
+The `pbpaste | tr` bit strips any whitespace or newlines that sometimes tag along with a copy. This matters.
+
+> [!IMPORTANT]
+> Do not use the interactive form (`security add-generic-password ... -w` with no value). The terminal prompt silently truncates long URLs on paste, and you will get 400s from Microsoft with no obvious cause. Always pass the URL non-interactively via `-w "$(pbpaste | tr -d '\n\r\t ')"` as shown above.
 
 Sanity check the length:
 
@@ -56,7 +69,10 @@ Easiest way is to open the WLED phone app, or look at your router's DHCP client 
 curl -s http://wled-abc123.local/json/info | head -c 200
 ```
 
-If that returns JSON, you have the right hostname. If it hangs or fails, try the raw IP address instead. Note that Tailscale in some configurations hijacks `.local` resolution, so if you are on Tailscale and mDNS fails, use the IP.
+If that returns JSON, you have the right hostname. If it hangs or fails, try the raw IP address instead.
+
+> [!TIP]
+> Tailscale in some configurations breaks `.local` mDNS resolution for tools like `curl` (ping still works because it uses a different resolver path). If you're on Tailscale and the hostname doesn't resolve, use the IP directly. A DHCP reservation on your router keeps the IP stable.
 
 ### 4. Configure the script
 
@@ -157,8 +173,8 @@ If the URL ever leaks: in Outlook Web, unpublish the calendar, then publish it a
 
 ## Known quirks
 
-- Microsoft's published-calendar feed refreshes server-side roughly every hour. Meetings added within the last hour may not appear in the feed yet, so last-minute additions can be missed. Everything else is fine.
-- Python's `urllib.request` gets HTTP 400 from the Microsoft endpoint even with a curl-ish User-Agent, for reasons I did not care enough to reverse-engineer. The script shells out to `curl` instead. It just works.
+- Microsoft's published-calendar feed refreshes server-side roughly every hour. Meetings added within the last hour may not appear in the feed yet, so last-minute additions can be missed. Other providers vary (Google is a few minutes, Fastmail is near-realtime), so your mileage depends on where your calendar lives.
+- Python's `urllib.request` gets HTTP 400 from the Microsoft endpoint even with a curl-ish User-Agent, for reasons I did not care enough to reverse-engineer. The script shells out to `curl` instead. That workaround is content-blind so it works fine against any provider, but if you're not on Outlook you'll probably never notice the fallback exists.
 - WLED effect numbers vary slightly between firmware versions. If your amber "pulse" looks wrong, try other values in the `EFFECT_BREATHE` constant. WLED docs list them all.
 
 ## Licence
