@@ -1,0 +1,3 @@
+#!/bin/sh
+# Wrapper so macOS Login Items shows "octolamp-meeting-alert" instead of "python3".
+exec /opt/homebrew/anaconda3/bin/python3 "$(cd "$(dirname "$0")" && pwd)/octolamp_meeting_alert.py" "$@"

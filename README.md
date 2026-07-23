@@ -78,8 +78,10 @@ The `recurring-ical-events` library does the tedious RRULE expansion so recurrin
 ### 6. Run it
 
 ```bash
-python3 octolamp_meeting_alert.py
+./octolamp-meeting-alert
 ```
+
+The wrapper just execs `python3 octolamp_meeting_alert.py` with the right interpreter. You can also run the script directly if you prefer: `python3 octolamp_meeting_alert.py`.
 
 The script prints one line when it starts, then stays silent until something happens. A state change looks like:
 
@@ -106,9 +108,10 @@ Once you trust it, create `~/Library/LaunchAgents/com.yourname.octolamp.plist`:
     <string>com.yourname.octolamp</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/python3</string>
-        <string>/Users/YOU/github/octolamp-meeting-alert/octolamp_meeting_alert.py</string>
+        <string>/Users/YOU/github/octolamp-meeting-alert/octolamp-meeting-alert</string>
     </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/YOU/github/octolamp-meeting-alert</string>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -120,6 +123,10 @@ Once you trust it, create `~/Library/LaunchAgents/com.yourname.octolamp.plist`:
 </dict>
 </plist>
 ```
+
+Pointing `ProgramArguments` at the `octolamp-meeting-alert` wrapper (rather than at `python3` with the script as an arg) is what makes macOS show "octolamp-meeting-alert" in System Settings → Login Items & Extensions, instead of a generic "python3".
+
+If your Python isn't at `/opt/homebrew/anaconda3/bin/python3`, edit the wrapper's shebang line and the path it execs.
 
 Load it:
 
