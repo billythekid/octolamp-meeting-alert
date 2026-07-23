@@ -44,7 +44,7 @@ ICS_LOOKAHEAD_MINUTES = 60
 AMBER = [255, 140, 0]
 RED = [255, 0, 0]
 EFFECT_SOLID = 0
-EFFECT_BREATHE = 2
+EFFECT_BREATHE = 12  # WLED "Fade" — cycles between col1 and col2 without dropping brightness
 
 STATE_IDLE = "idle"
 STATE_WARN = "warn"
@@ -150,7 +150,33 @@ def wled_set(payload: dict) -> bool:
 
 
 def apply_alert(color: list[int], effect: int) -> None:
-    wled_set({"on": True, "bri": 200, "seg": [{"col": [color, [0, 0, 0], [0, 0, 0]], "fx": effect, "sx": 128, "ix": 200}]})
+    """Apply the alert colour/effect to every existing segment.
+
+    Reads current segments so we preserve the user's ring/cat zoning
+    instead of collapsing everything into one segment.
+
+    Colour 2 is a dimmed copy of colour 1, not black. Breathe/fade effects
+    modulate between colours, and dropping to black makes LEDs behind
+    thicker diffusers (like the cat body) go visibly dark. Bottoming out
+    at "dim amber" keeps every LED visibly lit through the whole cycle.
+    """
+    dim = [max(1, c // 8) for c in color]
+    current = wled_get_state()
+    segs = (current or {}).get("seg") or []
+    if not segs:
+        payload_segs = [{"col": [color, dim, [0, 0, 0]], "fx": effect, "pal": 0, "sx": 128, "ix": 200}]
+    else:
+        payload_segs = []
+        for s in segs:
+            payload_segs.append({
+                "id": s.get("id", 0),
+                "col": [color, dim, [0, 0, 0]],
+                "fx": effect,
+                "pal": 0,
+                "sx": 128,
+                "ix": 200,
+            })
+    wled_set({"on": True, "bri": 200, "seg": payload_segs})
 
 
 def desired_state(soonest: dt.datetime | None, now_utc: dt.datetime) -> str:
