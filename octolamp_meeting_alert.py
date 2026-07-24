@@ -179,6 +179,37 @@ def apply_alert(color: list[int], effect: int) -> None:
     wled_set({"on": True, "bri": 200, "seg": payload_segs})
 
 
+def restore_lamp_state(saved: dict | None) -> None:
+    """Restore the lamp to whatever it was doing before the alert.
+
+    /json/state returns state directly (no {"state": ...} wrapper), so if the
+    snapshot has that wrapper we peel it in case a future WLED version changes.
+
+    If a preset was active at snapshot time (ps > 0), reload it by posting just
+    {"ps": N}. Posting the full state blob back doesn't work: it contains both
+    the preset id AND the resolved segments the preset expanded to, and WLED
+    ends up applying the raw seg payload on top of the preset load, freezing
+    the animation mid-frame. Reloading the preset by id lets WLED replay it
+    cleanly.
+
+    Only fall back to posting the raw on/bri/seg fields when no preset was
+    active (ps missing or -1). If we have nothing at all, turn the lamp off.
+    """
+    if not saved:
+        wled_set({"on": False})
+        return
+    state = saved.get("state", saved) if isinstance(saved, dict) else saved
+    ps = state.get("ps", -1)
+    if isinstance(ps, int) and ps > 0:
+        wled_set({"ps": ps})
+        return
+    payload = {k: state[k] for k in ("on", "bri", "seg") if k in state}
+    if payload:
+        wled_set(payload)
+    else:
+        wled_set({"on": False})
+
+
 def desired_state(soonest: dt.datetime | None, now_utc: dt.datetime) -> str:
     if soonest is None:
         return STATE_IDLE
@@ -226,18 +257,13 @@ def main() -> None:
                 elif new_state == STATE_IMMINENT:
                     apply_alert(RED, EFFECT_SOLID)
                 elif new_state == STATE_IDLE:
-                    if saved_lamp_state and "state" in saved_lamp_state:
-                        wled_set(saved_lamp_state["state"])
-                    elif saved_lamp_state:
-                        wled_set(saved_lamp_state)
-                    else:
-                        wled_set({"on": False})
+                    restore_lamp_state(saved_lamp_state)
                     saved_lamp_state = None
                 current_state = new_state
         except KeyboardInterrupt:
             print("bye")
             if saved_lamp_state:
-                wled_set(saved_lamp_state.get("state", saved_lamp_state))
+                restore_lamp_state(saved_lamp_state)
             return
         except Exception as e:
             print(f"loop error: {e}", flush=True)
