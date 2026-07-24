@@ -1,0 +1,15 @@
+[run]
+source = octolamp_meeting_alert
+branch = True
+
+[report]
+show_missing = True
+skip_empty = True
+exclude_lines =
+    # Standard pragma
+    pragma: no cover
+    # The import-error early exit can't be exercised while the module is imported
+    sys.stderr.write\(.*Missing deps
+    sys.exit\(1\)
+    # __main__ guard
+    if __name__ == .__main__.:

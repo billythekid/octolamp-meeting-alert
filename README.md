@@ -1,5 +1,7 @@
 # octolamp-meeting-alert
 
+[![tests](https://github.com/billythekid/octolamp-meeting-alert/actions/workflows/tests.yml/badge.svg)](https://github.com/billythekid/octolamp-meeting-alert/actions/workflows/tests.yml)
+
 A tiny Python script that watches your calendar and flashes your [Octolamp](https://github.com/martinwoodward/octolamp) (or any other [WLED](https://kno.wled.ge/) device) before a meeting starts.
 
 > [!NOTE]
@@ -95,7 +97,7 @@ Everything else (timing windows, colours, WLED effect IDs) has a sensible defaul
 ### 5. Install Python dependencies
 
 ```bash
-pip3 install --user icalendar recurring-ical-events tzdata
+pip3 install --user -r requirements.txt
 ```
 
 The `recurring-ical-events` library does the tedious RRULE expansion so recurring meetings (which is most of them) are handled properly, including exceptions and per-occurrence overrides.
@@ -184,7 +186,7 @@ If the URL ever leaks: in Outlook Web, unpublish the calendar, then publish it a
 
 ## Testing
 
-The suite lives in `tests/`, uses stdlib `unittest` (no dev deps), and doesn't touch the network or the lamp. Run it from the repo root:
+The suite lives in `tests/`, uses stdlib `unittest`, and doesn't touch the network or the lamp. Run it from the repo root:
 
 ```bash
 python3 -m unittest discover -s tests -v
@@ -197,6 +199,21 @@ Coverage:
 - `test_state_machine.py` — `desired_state` across every state including back-to-back meetings.
 - `test_relevant_meetings.py` — ICS filtering (past, far-future, all-day, cancelled, tentative, declined).
 - `test_restore.py` — `restore_lamp_state` with mocked `wled_set`, covering preset reload, fallback to raw state, and safe defaults.
+
+### Code coverage
+
+```bash
+pip3 install --user -r requirements-dev.txt
+coverage run -m unittest discover -s tests
+coverage report -m       # per-file % plus uncovered line numbers
+coverage html            # HTML report at htmlcov/index.html
+```
+
+Config lives in `.coveragerc`. The network/subprocess functions (`fetch_ics`, `load_ics_url`, `wled_get_state`, `wled_set`, `apply_alert`, the main polling loop) aren't currently tested, so overall coverage sits around 64%. Pure logic (state machine, ICS filtering, env parsing, restore, declined-by-self) is close to fully covered.
+
+### CI
+
+Every push and pull request to `main` runs the tests under coverage on Python 3.11, 3.12, and 3.13 via GitHub Actions (`.github/workflows/tests.yml`). The 3.12 job also uploads the HTML coverage report as a build artifact.
 
 ## Known quirks
 
