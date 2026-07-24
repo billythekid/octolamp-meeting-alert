@@ -6,7 +6,7 @@ State machine per poll (highest precedence first):
   - meeting in progress, <= END_WARN_MINUTES remaining -> green solid ("wrap it up")
   - meeting in progress, more time remaining           -> red solid ("in a meeting")
   - meeting starts within IMMINENT_MINUTES             -> red solid
-  - meeting starts within WARN_MINUTES                 -> amber breathe
+  - meeting starts within WARN_MINUTES                 -> amber with EFFECT_ALERT
   - otherwise                                          -> restore the pre-alert lamp state
 
 The pre-alert state is snapshotted on the first transition INTO an alert window
@@ -16,13 +16,17 @@ Setup:
   1) Store the .ics URL in Keychain:
        security add-generic-password -a "$USER" -s "octolamp-ics-url" -w
        (paste the URL when prompted, press Ctrl-D)
-  2) pip3 install --user requests icalendar recurring-ical-events tzdata
-  3) Run:  python3 octolamp_meeting_alert.py
+  2) Copy .env.example to .env and edit it (at minimum set WLED_HOST and
+     SELF_EMAIL_HINTS). Anything left unset falls back to the defaults in
+     this file.
+  3) pip3 install --user requests icalendar recurring-ical-events tzdata
+  4) Run:  python3 octolamp_meeting_alert.py
      Ctrl-C to stop.
 """
 
 import datetime as dt
 import json
+import os
 import subprocess
 import sys
 import time
@@ -37,32 +41,85 @@ except ImportError:
     sys.stderr.write("Missing deps. Run: pip3 install --user icalendar recurring-ical-events tzdata\n")
     sys.exit(1)
 
-WLED_HOST = "wled-8b385f.local"  # <-- change to your WLED device's mDNS hostname or IP
-POLL_SECONDS = 30
-WARN_MINUTES = 5           # amber breathe this many minutes before a meeting starts
-IMMINENT_MINUTES = 1       # red solid this many minutes before a meeting starts
-END_WARN_MINUTES = 5       # amber solid during the last N minutes of a meeting
-ICS_LOOKAHEAD_MINUTES = 60 # how far ahead to scan for upcoming meetings
-ICS_LOOKBACK_MINUTES = 240 # how far back to scan so long meetings already in progress are picked up
 
-WARN_COLOUR = [255, 140, 0]   # amber: pre-meeting warn (breathe)
-BUSY_COLOUR = [255, 0, 0]     # red:   imminent and in-meeting (solid)
-ENDING_COLOUR = [0, 200, 40]  # green: last END_WARN_MINUTES of a meeting (solid)
-EFFECT_SOLID = 0
-EFFECT_ALERT = 12  # WLED "Fade" effect: cycles between col1 and col2 without dropping brightness
+def _load_dotenv(path: str) -> None:
+    """Minimal .env loader (no dep). KEY=VALUE per line, # comments, optional
+    surrounding quotes stripped. Existing environment wins so shell overrides work.
+    """
+    try:
+        f = open(path)
+    except FileNotFoundError:
+        return
+    with f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            k = k.strip()
+            v = v.strip()
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+                v = v[1:-1]
+            os.environ.setdefault(k, v)
+
+
+_load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+
+
+def _env_int(key: str, default: int) -> int:
+    v = os.environ.get(key)
+    return int(v) if v else default
+
+
+def _env_colour(key: str, default: list[int]) -> list[int]:
+    v = os.environ.get(key)
+    if not v:
+        return default
+    parts = [int(x.strip()) for x in v.split(",") if x.strip()]
+    return parts if len(parts) == 3 else default
+
+
+def _env_tuple(key: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    v = os.environ.get(key)
+    if not v:
+        return default
+    out: list[str] = []
+    for item in v.split(","):
+        s = item.strip()
+        if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"'):
+            s = s[1:-1].strip()
+        if s:
+            out.append(s.lower())
+    return tuple(out)
+
+
+WLED_HOST = os.environ.get("WLED_HOST", "wled.local")   # override in .env with your device's mDNS hostname or IP
+POLL_SECONDS = _env_int("POLL_SECONDS", 30)
+WARN_MINUTES = _env_int("WARN_MINUTES", 5)              # coloured this many minutes before a meeting starts
+IMMINENT_MINUTES = _env_int("IMMINENT_MINUTES", 1)      # BUSY_COLOUR solid this many minutes before a meeting starts
+END_WARN_MINUTES = _env_int("END_WARN_MINUTES", 5)      # ENDING_COLOUR solid during the last N minutes of a meeting
+ICS_LOOKAHEAD_MINUTES = _env_int("ICS_LOOKAHEAD_MINUTES", 60)   # how far ahead to scan for upcoming meetings
+ICS_LOOKBACK_MINUTES = _env_int("ICS_LOOKBACK_MINUTES", 240)    # how far back to scan so long meetings already in progress are picked up
+
+WARN_COLOUR = _env_colour("WARN_COLOUR", [255, 140, 0])     # amber default: pre-meeting warn (rendered with EFFECT_ALERT)
+BUSY_COLOUR = _env_colour("BUSY_COLOUR", [255, 0, 0])       # red default:   imminent and in-meeting (solid)
+ENDING_COLOUR = _env_colour("ENDING_COLOUR", [0, 200, 40])  # green default: last END_WARN_MINUTES of a meeting (solid)
+EFFECT_SOLID = _env_int("EFFECT_SOLID", 0)
+EFFECT_ALERT = _env_int("EFFECT_ALERT", 12)  # WLED "Fade" effect: cycles between col1 and col2 without dropping brightness
 
 STATE_IDLE = "idle"
-STATE_WARN = "warn"                # <=WARN_MINUTES before start: amber breathe
-STATE_IMMINENT = "imminent"        # <=IMMINENT_MINUTES before start: red solid
-STATE_IN_MEETING = "in_meeting"    # meeting in progress, >END_WARN_MINUTES left: red solid
-STATE_ENDING = "ending"            # meeting in progress, <=END_WARN_MINUTES left: amber solid
+STATE_WARN = "warn"                # <=WARN_MINUTES before start: WARN_COLOUR with EFFECT_ALERT
+STATE_IMMINENT = "imminent"        # <=IMMINENT_MINUTES before start: BUSY_COLOUR solid
+STATE_IN_MEETING = "in_meeting"    # meeting in progress, >END_WARN_MINUTES left: BUSY_COLOUR solid
+STATE_ENDING = "ending"            # meeting in progress, <=END_WARN_MINUTES left: ENDING_COLOUR solid
 
 SKIP_STATUSES = {"CANCELLED", "TENTATIVE"}
 SKIP_PARTSTATS = {"DECLINED"}
 
-# Substrings we look for inside ATTENDEE fields to identify "you". Used only to
-# skip meetings you declined. Add any variants your organisation uses.
-SELF_EMAIL_HINTS = ("billyfagan", "billy.fagan", "billythekid")
+# Comma-separated substrings looked for inside ATTENDEE fields (both the mailto
+# URI and the CN display-name param) to identify "you". Used only to skip
+# meetings you declined. Set SELF_EMAIL_HINTS in your .env. Case-insensitive.
+SELF_EMAIL_HINTS = _env_tuple("SELF_EMAIL_HINTS", ("yourhandle",))
 
 
 def load_ics_url() -> str:
@@ -91,12 +148,26 @@ def fetch_ics(url: str) -> bytes:
 
 
 def declined_by_self(component) -> bool:
-    for attendee in component.get("attendee", []) or []:
+    attendees = component.get("attendee", []) or []
+    # icalendar returns a single vCalAddress (a str subclass) when the event has
+    # exactly one ATTENDEE, and a list when it has multiple. Iterating the bare
+    # vCalAddress walks its characters, so normalise to a list first.
+    if isinstance(attendees, str):
+        attendees = [attendees]
+    for attendee in attendees:
+        # An ATTENDEE is usually a vCalAddress whose str() gives the mailto URI,
+        # with the display name hiding in the CN param. Check both so hints like
+        # "billy.fagan" (matches the URI) and "billy fagan" (matches the CN) both work.
         try:
             addr = str(attendee).lower()
         except Exception:
-            continue
-        if not any(hint in addr for hint in SELF_EMAIL_HINTS):
+            addr = ""
+        try:
+            cn = str(attendee.params.get("CN", "")).lower()
+        except Exception:
+            cn = ""
+        haystack = f"{addr} {cn}"
+        if not any(hint in haystack for hint in SELF_EMAIL_HINTS):
             continue
         try:
             partstat = str(attendee.params.get("PARTSTAT", "")).upper()
@@ -187,7 +258,7 @@ def apply_alert(color: list[int], effect: int) -> None:
     Reads current segments so we preserve the user's ring/cat zoning
     instead of collapsing everything into one segment.
 
-    Colour 2 is a dimmed copy of colour 1, not black. Breathe/fade effects
+    Colour 2 is a dimmed copy of colour 1, not black. Two-colour effects
     modulate between colours, and dropping to black makes LEDs behind
     thicker diffusers (like the cat body) go visibly dark. Bottoming out
     at "dim amber" keeps every LED visibly lit through the whole cycle.
@@ -261,6 +332,7 @@ def desired_state(
     upcoming = [(s, e) for s, e in meetings if s > now_utc]
     if not upcoming:
         return STATE_IDLE, None
+    upcoming.sort(key=lambda x: x[0])
     start, _ = upcoming[0]
     delta = start - now_utc
     if delta <= dt.timedelta(minutes=IMMINENT_MINUTES):

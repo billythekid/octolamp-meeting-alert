@@ -5,9 +5,10 @@ A tiny Python script that watches your calendar and flashes your [Octolamp](http
 > [!NOTE]
 > Works with any iCalendar (`.ics`) subscription URL. I've only tested it against Outlook on the web, but the parser is RFC 5545 standard so Google Calendar, iCloud/Apple Calendar, Fastmail, Proton, Nextcloud etc. should all work. If your provider doesn't, [open an issue](https://github.com/billythekid/octolamp-meeting-alert/issues) or send a PR.
 
-- Amber pulse at T-5 minutes.
-- Red solid at T-1 minute.
-- Restores whatever the lamp was doing before, once the meeting starts.
+- Amber, pulsing, at T-5 minutes.
+- Red, solid, at T-1 minute and for the whole duration of the meeting.
+- Green, solid, in the last 5 minutes of the meeting (a quiet "wrap it up" nudge).
+- Restores whatever the lamp was doing before, once the meeting ends.
 
 Runs on your Mac in a terminal window (or as a background LaunchAgent if you want it to survive reboots).
 
@@ -76,12 +77,20 @@ If that returns JSON, you have the right hostname. If it hangs or fails, try the
 
 ### 4. Configure the script
 
-Open `octolamp_meeting_alert.py` and edit the constants at the top:
+Copy the example env file and edit it:
+
+```bash
+cp .env.example .env
+```
+
+At minimum set:
 
 - `WLED_HOST` — your device hostname or IP, e.g. `wled-abc123.local` or `192.168.1.70`.
-- `SELF_EMAIL_HINTS` — substrings of your work email, used only to skip meetings you have declined. Set to something that will match your name or handle inside an ATTENDEE line, e.g. `("jane.smith", "jsmith")`.
-- Timing constants (`WARN_MINUTES`, `IMMINENT_MINUTES`, `POLL_SECONDS`) are fine at their defaults but tweak if you want.
-- `AMBER` and `RED` are RGB triples if you fancy different colours.
+- `SELF_EMAIL_HINTS` — comma-separated substrings that identify you inside an ATTENDEE line. Both the `mailto:` URI and the `CN` display name are checked, so `jane.smith,"Jane Smith"` covers both. Used only to skip meetings you have declined. Quotes around values with spaces or commas are optional but supported.
+
+Everything else (timing windows, colours, WLED effect IDs) has a sensible default; uncomment and change the entries in `.env` if you want to override.
+
+`.env` is gitignored, so your host and identifying strings never end up in a commit.
 
 ### 5. Install Python dependencies
 
@@ -104,7 +113,9 @@ The script prints one line when it starts, then stays silent until something hap
 ```
 [16:55:03] idle -> warn (next 17:00)
 [16:59:03] warn -> imminent (next 17:00)
-[17:00:03] imminent -> idle (next -)
+[17:00:03] imminent -> in_meeting (ends 17:30)
+[17:25:03] in_meeting -> ending (ends 17:30)
+[17:30:03] ending -> idle (next -)
 ```
 
 Ctrl-C stops it and restores the lamp's prior state.
@@ -164,12 +175,28 @@ If the URL ever leaks: in Outlook Web, unpublish the calendar, then publish it a
 
 ## How it works
 
-- Polls the `.ics` URL every 60 seconds (cached, to be gentle on Microsoft's server).
-- Expands the next 60 minutes of events using `recurring-ical-events`, which handles RRULE + EXDATE + per-occurrence overrides.
-- Skips CANCELLED and TENTATIVE events, and events where an ATTENDEE line matching your `SELF_EMAIL_HINTS` has `PARTSTAT=DECLINED`.
-- On the first transition into an alert window, snapshots the current WLED state via `GET /json/state`.
-- On the transition out, POSTs that saved state back so the lamp returns to whatever it was doing before.
-- If the lamp was off before the alert, it goes off after.
+- Polls the `.ics` URL every 30 seconds, cached for 60s to be gentle on the provider.
+- Expands events using `recurring-ical-events`, which handles RRULE + EXDATE + per-occurrence overrides. Scans a 60-minute lookahead window and a 4-hour lookback so meetings already in progress when the script starts are picked up.
+- Skips CANCELLED and TENTATIVE events, and events where an ATTENDEE line matching your `SELF_EMAIL_HINTS` has `PARTSTAT=DECLINED`. Both the `mailto:` URI and the `CN` display-name param are checked.
+- State priority per poll (highest first): in-progress meeting with <=5 min left → green solid; in-progress meeting with more time left → red solid; upcoming meeting within 1 min → red solid; upcoming meeting within 5 min → amber with the alert effect; else → restore the pre-alert lamp state.
+- On the first transition into any alert state, snapshots the current WLED state via `GET /json/state`.
+- On the transition back to idle, restores the snapshot: if a preset was active it reloads by id (`{"ps": N}`); otherwise it re-posts the raw `on`/`bri`/`seg` fields. If nothing was active, the lamp goes off.
+
+## Testing
+
+The suite lives in `tests/`, uses stdlib `unittest` (no dev deps), and doesn't touch the network or the lamp. Run it from the repo root:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+Coverage:
+
+- `test_config.py` — `.env` parser and typed accessors (int, colour, tuple with quoted values).
+- `test_declined.py` — `declined_by_self` across single/multi ATTENDEE events, CN vs URI matching, PARTSTAT branches.
+- `test_state_machine.py` — `desired_state` across every state including back-to-back meetings.
+- `test_relevant_meetings.py` — ICS filtering (past, far-future, all-day, cancelled, tentative, declined).
+- `test_restore.py` — `restore_lamp_state` with mocked `wled_set`, covering preset reload, fallback to raw state, and safe defaults.
 
 ## Known quirks
 
