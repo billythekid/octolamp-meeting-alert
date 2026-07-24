@@ -10,7 +10,7 @@ class RelevantMeetingsTests(unittest.TestCase):
     def setUp(self) -> None:
         self.now = utc(2026, 1, 1, 12, 0, 0)
         self._saved_hints = m.SELF_EMAIL_HINTS
-        m.SELF_EMAIL_HINTS = ("billy.fagan",)
+        m.SELF_EMAIL_HINTS = ("jane.doe",)
         self.addCleanup(lambda: setattr(m, "SELF_EMAIL_HINTS", self._saved_hints))
 
     def test_returns_upcoming_meeting_in_window(self) -> None:
@@ -74,7 +74,7 @@ class RelevantMeetingsTests(unittest.TestCase):
         ics = build_ics([{
             "dtstart": utc(2026, 1, 1, 12, 30),
             "dtend": utc(2026, 1, 1, 13, 0),
-            "attendees": [";PARTSTAT=DECLINED:mailto:billy.fagan@example.com"],
+            "attendees": [";PARTSTAT=DECLINED:mailto:jane.doe@example.com"],
         }])
         self.assertEqual(m.relevant_meetings(ics, self.now), [])
 

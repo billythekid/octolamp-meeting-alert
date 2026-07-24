@@ -28,49 +28,49 @@ class DeclinedBySelfTests(unittest.TestCase):
 
     def test_single_attendee_declined_matches_uri(self) -> None:
         # Regression: single attendee used to iterate its characters.
-        m.SELF_EMAIL_HINTS = ("billy.fagan",)
-        ev = self._ev([";PARTSTAT=DECLINED:mailto:billy.fagan@example.com"])
+        m.SELF_EMAIL_HINTS = ("jane.doe",)
+        ev = self._ev([";PARTSTAT=DECLINED:mailto:jane.doe@example.com"])
         self.assertTrue(m.declined_by_self(ev))
 
     def test_single_attendee_declined_matches_cn(self) -> None:
-        m.SELF_EMAIL_HINTS = ("billy fagan",)
-        ev = self._ev([';CN="Billy Fagan";PARTSTAT=DECLINED:mailto:other@example.com'])
+        m.SELF_EMAIL_HINTS = ("jane doe",)
+        ev = self._ev([';CN="Jane Doe";PARTSTAT=DECLINED:mailto:other@example.com'])
         self.assertTrue(m.declined_by_self(ev))
 
     def test_multiple_attendees_declined(self) -> None:
-        m.SELF_EMAIL_HINTS = ("billy.fagan",)
+        m.SELF_EMAIL_HINTS = ("jane.doe",)
         ev = self._ev([
             ";PARTSTAT=ACCEPTED:mailto:someone@example.com",
-            ";PARTSTAT=DECLINED:mailto:billy.fagan@example.com",
+            ";PARTSTAT=DECLINED:mailto:jane.doe@example.com",
         ])
         self.assertTrue(m.declined_by_self(ev))
 
     def test_accepted_is_not_declined(self) -> None:
-        m.SELF_EMAIL_HINTS = ("billy.fagan",)
-        ev = self._ev([";PARTSTAT=ACCEPTED:mailto:billy.fagan@example.com"])
+        m.SELF_EMAIL_HINTS = ("jane.doe",)
+        ev = self._ev([";PARTSTAT=ACCEPTED:mailto:jane.doe@example.com"])
         self.assertFalse(m.declined_by_self(ev))
 
     def test_hint_matches_only_other_attendee(self) -> None:
-        m.SELF_EMAIL_HINTS = ("billy.fagan",)
+        m.SELF_EMAIL_HINTS = ("jane.doe",)
         ev = self._ev([
             ";PARTSTAT=DECLINED:mailto:someone.else@example.com",
-            ";PARTSTAT=ACCEPTED:mailto:billy.fagan@example.com",
+            ";PARTSTAT=ACCEPTED:mailto:jane.doe@example.com",
         ])
         self.assertFalse(m.declined_by_self(ev))
 
     def test_case_insensitive_matching(self) -> None:
-        m.SELF_EMAIL_HINTS = ("billy fagan",)
-        ev = self._ev([';CN="BILLY FAGAN";PARTSTAT=DECLINED:mailto:x@example.com'])
+        m.SELF_EMAIL_HINTS = ("jane doe",)
+        ev = self._ev([';CN="JANE DOE";PARTSTAT=DECLINED:mailto:x@example.com'])
         self.assertTrue(m.declined_by_self(ev))
 
     def test_no_attendees_returns_false(self) -> None:
-        m.SELF_EMAIL_HINTS = ("billy.fagan",)
+        m.SELF_EMAIL_HINTS = ("jane.doe",)
         ev = self._ev([])
         self.assertFalse(m.declined_by_self(ev))
 
     def test_empty_hints_never_matches(self) -> None:
         m.SELF_EMAIL_HINTS = ()
-        ev = self._ev([";PARTSTAT=DECLINED:mailto:billy.fagan@example.com"])
+        ev = self._ev([";PARTSTAT=DECLINED:mailto:jane.doe@example.com"])
         self.assertFalse(m.declined_by_self(ev))
 
 
