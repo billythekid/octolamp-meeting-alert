@@ -2,10 +2,12 @@
 """
 Poll a published Outlook .ics feed and flash the Octolamp (WLED) before meetings.
 
-State machine per poll:
-  - meeting inside T-1 min  -> red solid
-  - meeting inside T-5 min  -> amber pulse (breathe)
-  - otherwise               -> restore whatever state the lamp was in before the alert
+State machine per poll (highest precedence first):
+  - meeting in progress, <= END_WARN_MINUTES remaining -> green solid ("wrap it up")
+  - meeting in progress, more time remaining           -> red solid ("in a meeting")
+  - meeting starts within IMMINENT_MINUTES             -> red solid
+  - meeting starts within WARN_MINUTES                 -> amber breathe
+  - otherwise                                          -> restore the pre-alert lamp state
 
 The pre-alert state is snapshotted on the first transition INTO an alert window
 and restored on the first transition OUT.
@@ -37,18 +39,23 @@ except ImportError:
 
 WLED_HOST = "wled-8b385f.local"  # <-- change to your WLED device's mDNS hostname or IP
 POLL_SECONDS = 30
-WARN_MINUTES = 5
-IMMINENT_MINUTES = 1
-ICS_LOOKAHEAD_MINUTES = 60
+WARN_MINUTES = 5           # amber breathe this many minutes before a meeting starts
+IMMINENT_MINUTES = 1       # red solid this many minutes before a meeting starts
+END_WARN_MINUTES = 5       # amber solid during the last N minutes of a meeting
+ICS_LOOKAHEAD_MINUTES = 60 # how far ahead to scan for upcoming meetings
+ICS_LOOKBACK_MINUTES = 240 # how far back to scan so long meetings already in progress are picked up
 
-AMBER = [255, 140, 0]
-RED = [255, 0, 0]
+WARN_COLOUR = [255, 140, 0]   # amber: pre-meeting warn (breathe)
+BUSY_COLOUR = [255, 0, 0]     # red:   imminent and in-meeting (solid)
+ENDING_COLOUR = [0, 200, 40]  # green: last END_WARN_MINUTES of a meeting (solid)
 EFFECT_SOLID = 0
 EFFECT_ALERT = 12  # WLED "Fade" effect: cycles between col1 and col2 without dropping brightness
 
 STATE_IDLE = "idle"
-STATE_WARN = "warn"
-STATE_IMMINENT = "imminent"
+STATE_WARN = "warn"                # <=WARN_MINUTES before start: amber breathe
+STATE_IMMINENT = "imminent"        # <=IMMINENT_MINUTES before start: red solid
+STATE_IN_MEETING = "in_meeting"    # meeting in progress, >END_WARN_MINUTES left: red solid
+STATE_ENDING = "ending"            # meeting in progress, <=END_WARN_MINUTES left: amber solid
 
 SKIP_STATUSES = {"CANCELLED", "TENTATIVE"}
 SKIP_PARTSTATS = {"DECLINED"}
@@ -100,12 +107,27 @@ def declined_by_self(component) -> bool:
     return False
 
 
-def next_meeting(ics_bytes: bytes, now_utc: dt.datetime) -> dt.datetime | None:
-    cal = icalendar.Calendar.from_ical(ics_bytes)
-    window_end = now_utc + dt.timedelta(minutes=ICS_LOOKAHEAD_MINUTES)
-    events = recurring_ical_events.of(cal).between(now_utc, window_end)
+def _as_utc(v: dt.datetime) -> dt.datetime:
+    if v.tzinfo is None:
+        return v.replace(tzinfo=dt.timezone.utc)
+    return v.astimezone(dt.timezone.utc)
 
-    soonest: dt.datetime | None = None
+
+def relevant_meetings(ics_bytes: bytes, now_utc: dt.datetime) -> list[tuple[dt.datetime, dt.datetime]]:
+    """Return (start_utc, end_utc) tuples for meetings that either overlap now
+    or start within ICS_LOOKAHEAD_MINUTES, sorted by start time.
+
+    Widens the scan backwards by ICS_LOOKBACK_MINUTES so long meetings that
+    started before the lookahead window are still picked up while they're in
+    progress. Skips all-day events, cancelled/tentative events, and events
+    the user declined.
+    """
+    cal = icalendar.Calendar.from_ical(ics_bytes)
+    window_start = now_utc - dt.timedelta(minutes=ICS_LOOKBACK_MINUTES)
+    window_end = now_utc + dt.timedelta(minutes=ICS_LOOKAHEAD_MINUTES)
+    events = recurring_ical_events.of(cal).between(window_start, window_end)
+
+    out: list[tuple[dt.datetime, dt.datetime]] = []
     for ev in events:
         status = str(ev.get("status", "")).upper()
         if status in SKIP_STATUSES:
@@ -115,15 +137,25 @@ def next_meeting(ics_bytes: bytes, now_utc: dt.datetime) -> dt.datetime | None:
         start = ev.get("dtstart").dt
         if isinstance(start, dt.date) and not isinstance(start, dt.datetime):
             continue  # skip all-day
-        if start.tzinfo is None:
-            start = start.replace(tzinfo=dt.timezone.utc)
+        end_prop = ev.get("dtend")
+        if end_prop is not None:
+            end = end_prop.dt
+            if isinstance(end, dt.date) and not isinstance(end, dt.datetime):
+                continue
         else:
-            start = start.astimezone(dt.timezone.utc)
-        if start < now_utc:
-            continue
-        if soonest is None or start < soonest:
-            soonest = start
-    return soonest
+            dur = ev.get("duration")
+            if dur is None:
+                continue  # unknown end, can't decide "in meeting" without it
+            end = start + dur.dt
+        start = _as_utc(start)
+        end = _as_utc(end)
+        if end <= now_utc:
+            continue  # already finished
+        if start > window_end:
+            continue  # too far in the future
+        out.append((start, end))
+    out.sort(key=lambda x: x[0])
+    return out
 
 
 def wled_get_state() -> dict | None:
@@ -210,15 +242,32 @@ def restore_lamp_state(saved: dict | None) -> None:
         wled_set({"on": False})
 
 
-def desired_state(soonest: dt.datetime | None, now_utc: dt.datetime) -> str:
-    if soonest is None:
-        return STATE_IDLE
-    delta = soonest - now_utc
+def desired_state(
+    meetings: list[tuple[dt.datetime, dt.datetime]],
+    now_utc: dt.datetime,
+) -> tuple[str, dt.datetime | None]:
+    """Return (state, marker_time). marker_time is the meeting end for in-progress
+    states and the meeting start for pre-meeting states, so the caller can log
+    something useful.
+    """
+    active = [(s, e) for s, e in meetings if s <= now_utc < e]
+    if active:
+        active.sort(key=lambda x: x[1])  # earliest ending first
+        _, end = active[0]
+        remaining = end - now_utc
+        if remaining <= dt.timedelta(minutes=END_WARN_MINUTES):
+            return STATE_ENDING, end
+        return STATE_IN_MEETING, end
+    upcoming = [(s, e) for s, e in meetings if s > now_utc]
+    if not upcoming:
+        return STATE_IDLE, None
+    start, _ = upcoming[0]
+    delta = start - now_utc
     if delta <= dt.timedelta(minutes=IMMINENT_MINUTES):
-        return STATE_IMMINENT
+        return STATE_IMMINENT, start
     if delta <= dt.timedelta(minutes=WARN_MINUTES):
-        return STATE_WARN
-    return STATE_IDLE
+        return STATE_WARN, start
+    return STATE_IDLE, start
 
 
 def main() -> None:
@@ -244,18 +293,21 @@ def main() -> None:
                     time.sleep(POLL_SECONDS)
                     continue
 
-            soonest = next_meeting(ics_cache, now_utc)
-            new_state = desired_state(soonest, now_utc)
+            meetings = relevant_meetings(ics_cache, now_utc)
+            new_state, marker = desired_state(meetings, now_utc)
 
             if new_state != current_state:
-                soon_local = soonest.astimezone(tz_local).strftime("%H:%M") if soonest else "-"
-                print(f"[{now_utc.astimezone(tz_local):%H:%M:%S}] {current_state} -> {new_state} (next {soon_local})", flush=True)
+                marker_local = marker.astimezone(tz_local).strftime("%H:%M") if marker else "-"
+                label = "ends" if new_state in (STATE_IN_MEETING, STATE_ENDING) else "next"
+                print(f"[{now_utc.astimezone(tz_local):%H:%M:%S}] {current_state} -> {new_state} ({label} {marker_local})", flush=True)
                 if current_state == STATE_IDLE and new_state != STATE_IDLE:
                     saved_lamp_state = wled_get_state()
                 if new_state == STATE_WARN:
-                    apply_alert(AMBER, EFFECT_ALERT)
-                elif new_state == STATE_IMMINENT:
-                    apply_alert(RED, EFFECT_SOLID)
+                    apply_alert(WARN_COLOUR, EFFECT_ALERT)
+                elif new_state == STATE_IMMINENT or new_state == STATE_IN_MEETING:
+                    apply_alert(BUSY_COLOUR, EFFECT_SOLID)
+                elif new_state == STATE_ENDING:
+                    apply_alert(ENDING_COLOUR, EFFECT_SOLID)
                 elif new_state == STATE_IDLE:
                     restore_lamp_state(saved_lamp_state)
                     saved_lamp_state = None
